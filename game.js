@@ -16,6 +16,7 @@ let socket;
 let roomCode = null;
 let isHost = false;
 let isConnected = false;
+let customWebSocketHost = null;
 let localPlayerId = 'p1';
 let reconnectAttempts = 0;
 let reconnectTimeout = null;
@@ -26,7 +27,14 @@ const DEFAULT_WS_PORT = 8000;
 const DEFAULT_GITHUB_PAGES_WS_HOST = 'musical-orbit-wvprwjx5pj9fgxw9-8000.app.github.dev';
 const pendingSocketMessages = [];
 
+function setCustomWebSocketHost(host) {
+  customWebSocketHost = host ? host.trim() : null;
+}
+
 function getWebSocketHost() {
+  if (customWebSocketHost) {
+    return customWebSocketHost;
+  }
   const url = new URL(window.location.href);
   const queryHost = url.searchParams.get('wsHost') || url.searchParams.get('ws');
   if (queryHost) {
@@ -131,8 +139,8 @@ function updatePlayer(player, dt) {
   let dx = 0;
   let dy = 0;
 
-  // If connected to a room, only apply input to the local player
-  const applyInput = !roomCode || player.id === localPlayerId;
+  // Only apply input to the local player
+  const applyInput = player.id === localPlayerId;
   if (!applyInput) return;
 
   if (keys.w) dy -= 1;
@@ -586,6 +594,7 @@ function initUI() {
   const showJoinBtn = document.getElementById('showJoin');
   const joinControls = document.getElementById('joinControls');
   const roomCodeInput = document.getElementById('roomCode');
+  const serverHostInput = document.getElementById('serverHost');
   const joinRoomBtn = document.getElementById('joinRoom');
 
   joinControls.style.display = 'none';
@@ -612,6 +621,8 @@ function initUI() {
 
   joinRoomBtn.addEventListener('click', () => {
     const code = roomCodeInput.value.trim();
+    const host = serverHostInput.value.trim();
+    setCustomWebSocketHost(host);
     if (!code) {
       roomStatusText.textContent = 'Enter a join code.';
       return;
