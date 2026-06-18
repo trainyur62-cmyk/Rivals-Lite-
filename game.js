@@ -18,7 +18,11 @@ let isHost = false;
 let isConnected = false;
 let localPlayerId = 'p1';
 let reconnectAttempts = 0;
+let reconnectTimeout = null;
+let lastConnectAttempt = 0;
 const maxReconnectDelay = 10; // seconds
+const minReconnectDelay = 1000; // milliseconds
+const pendingSocketMessages = [];
 
 const weapons = {
   primary: {
@@ -457,19 +461,31 @@ function loop(timestamp) {
   drawCanvasScoreboard();
 
   requestAnimationFrame(loop);
-  // Attempt to connect to the game server immediately so multiplayer can join
-  connectSocket();
 }
 
 function connectSocket() {
+  const now = Date.now();
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+  if (now - lastConnectAttempt < minReconnectDelay) return;
+  lastConnectAttempt = now;
+
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  socket = new WebSocket(`${protocol}://${window.location.host}`);
+  const wsUrl = `${protocol}://${window.location.host}`;
+  roomStatusText.textContent = `Connecting to ${wsUrl}...`;
+  socket = new WebSocket(wsUrl);
 
   socket.addEventListener('open', () => {
     isConnected = true;
     reconnectAttempts = 0;
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout);
+      reconnectTimeout = null;
+    }
     roomStatusText.textContent = 'Connected to server.';
+    if (pendingSocketMessages.length > 0) {
+      pendingSocketMessages.forEach((pending) => socket.send(JSON.stringify(pending)));
+      pendingSocketMessages.length = 0;
+    }
   });
 
   socket.addEventListener('error', (err) => {
@@ -520,10 +536,14 @@ function connectSocket() {
   socket.addEventListener('close', () => {
     isConnected = false;
     roomStatusText.textContent = 'Disconnected from server.';
+    socket = null;
     // attempt reconnect with backoff
-    reconnectAttempts++;
+    reconnectAttempts = Math.min(reconnectAttempts + 1, 10);
     const delay = Math.min(maxReconnectDelay, Math.pow(2, reconnectAttempts)) * 1000;
-    setTimeout(() => {
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout);
+    }
+    reconnectTimeout = setTimeout(() => {
       roomStatusText.textContent = `Reconnecting... (attempt ${reconnectAttempts})`;
       connectSocket();
     }, delay);
@@ -548,14 +568,12 @@ function initUI() {
   hud.style.display = 'none';
 
   function sendSocketMessage(message) {
-    if (!socket) connectSocket();
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(message));
-    } else {
-      socket.addEventListener('open', () => {
-        socket.send(JSON.stringify(message));
-      }, { once: true });
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      pendingSocketMessages.push(message);
+      connectSocket();
+      return;
     }
+    socket.send(JSON.stringify(message));
   }
 
   createRoomBtn.addEventListener('click', () => {
