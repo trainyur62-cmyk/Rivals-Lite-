@@ -22,7 +22,30 @@ let reconnectTimeout = null;
 let lastConnectAttempt = 0;
 const maxReconnectDelay = 10; // seconds
 const minReconnectDelay = 1000; // milliseconds
+const DEFAULT_WS_PORT = 8000;
+const DEFAULT_GITHUB_PAGES_WS_HOST = 'musical-orbit-wvprwjx5pj9fgxw9-8000.app.github.dev';
 const pendingSocketMessages = [];
+
+function getWebSocketHost() {
+  const url = new URL(window.location.href);
+  const queryHost = url.searchParams.get('wsHost') || url.searchParams.get('ws');
+  if (queryHost) {
+    return queryHost;
+  }
+  const isGitHubPages = window.location.hostname === 'trainyur62-cmyk.github.io';
+  if (isGitHubPages) {
+    return DEFAULT_GITHUB_PAGES_WS_HOST;
+  }
+  return window.location.host;
+}
+
+function getWebSocketProtocol(host) {
+  const isLocalHost = host.startsWith('localhost') || host.startsWith('127.') || host.startsWith('[::1]');
+  if (window.location.protocol === 'https:' && !isLocalHost) {
+    return 'wss';
+  }
+  return 'ws';
+}
 
 const weapons = {
   primary: {
@@ -469,8 +492,9 @@ function connectSocket() {
   if (now - lastConnectAttempt < minReconnectDelay) return;
   lastConnectAttempt = now;
 
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const wsUrl = `${protocol}://${window.location.host}`;
+  const host = getWebSocketHost();
+  const protocol = getWebSocketProtocol(host);
+  const wsUrl = `${protocol}://${host}`;
   roomStatusText.textContent = `Connecting to ${wsUrl}...`;
   socket = new WebSocket(wsUrl);
 
