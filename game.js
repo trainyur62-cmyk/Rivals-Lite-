@@ -44,7 +44,10 @@ function getWebSocketHost() {
 
 function getWebSocketProtocol(host) {
   const isLocalHost = host.startsWith('localhost') || host.startsWith('127.') || host.startsWith('[::1]');
-  if (window.location.protocol === 'https:' && !isLocalHost) {
+  if (isLocalHost) {
+    return 'ws';
+  }
+  if (window.location.protocol === 'https:') {
     return 'wss';
   }
   return 'ws';
