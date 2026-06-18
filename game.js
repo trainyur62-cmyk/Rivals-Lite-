@@ -23,8 +23,7 @@ let reconnectTimeout = null;
 let lastConnectAttempt = 0;
 const maxReconnectDelay = 10; // seconds
 const minReconnectDelay = 1000; // milliseconds
-const DEFAULT_WS_PORT = 8000;
-const DEFAULT_GITHUB_PAGES_WS_HOST = 'musical-orbit-wvprwjx5pj9fgxw9-8000.app.github.dev';
+const DEFAULT_WS_HOST = 'musical-orbit-wvprwjx5pj9fgxw9-8000.app.github.dev';
 const pendingSocketMessages = [];
 
 function setCustomWebSocketHost(host) {
@@ -40,11 +39,7 @@ function getWebSocketHost() {
   if (queryHost) {
     return queryHost;
   }
-  const isGitHubPages = window.location.hostname === 'trainyur62-cmyk.github.io';
-  if (isGitHubPages) {
-    return DEFAULT_GITHUB_PAGES_WS_HOST;
-  }
-  return window.location.host;
+  return DEFAULT_WS_HOST;
 }
 
 function getWebSocketProtocol(host) {
