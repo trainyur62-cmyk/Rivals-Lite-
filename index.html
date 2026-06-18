@@ -1,1 +1,46 @@
-
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rivals Lite</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="game-shell">
+    <div class="menu" id="menu">
+      <h1>Rivals Lite</h1>
+      <div class="button-row">
+        <button id="createRoom">Create room</button>
+        <button id="showJoin">Join room</button>
+      </div>
+      <div class="room-controls" id="joinControls">
+        <input id="roomCode" placeholder="Enter join code" maxlength="4" />
+        <button id="joinRoom">Join</button>
+      </div>
+      <div class="status" id="roomStatus"></div>
+      <div class="help">
+        <p>Blue/Red player controls: WASD + mouse + click + E</p>
+        <p>Red is the joined player and uses the same controls as Blue.</p>
+        <p>Health: 150</p>
+        <p>Primary damage: 5 (blue)</p>
+        <p>Secondary damage: 20 (orange)</p>
+      </div>
+    </div>
+    <canvas id="gameCanvas" width="1280" height="720"></canvas>
+    <div class="hud" id="hud">
+      <div class="title">Online Shooter</div>
+      <div id="scoreboard">
+        <div id="scoreBlue">Blue: 0</div>
+        <div id="scoreRed">Red: 0</div>
+      </div>
+      <div id="gameInfo"></div>
+      <div id="playerInfo"></div>
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
+cd /workspaces/shooter-game
+python3 -m http.server 8000
