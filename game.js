@@ -24,6 +24,7 @@ let lastConnectAttempt = 0;
 const maxReconnectDelay = 10; // seconds
 const minReconnectDelay = 1000; // milliseconds
 const DEFAULT_WS_HOST = 'localhost:8000';
+const SCORE_LIMIT = 5;
 const pendingSocketMessages = [];
 
 function setCustomWebSocketHost(host) {
@@ -265,6 +266,37 @@ function resetGame() {
   // don't reset scores here - scoreboard persists across rounds
 }
 
+function goHome() {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.close();
+  }
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  socket = null;
+  roomCode = null;
+  customWebSocketHost = null;
+  isHost = false;
+  localPlayerId = 'p1';
+  reconnectAttempts = 0;
+  roundOver = false;
+  restartTimer = 0;
+  scores.Blue = 0;
+  scores.Red = 0;
+  resetGame();
+
+  const menu = document.getElementById('menu');
+  const joinControls = document.getElementById('joinControls');
+  const hud = document.getElementById('hud');
+  if (menu) menu.style.display = 'block';
+  if (joinControls) joinControls.style.display = 'none';
+  if (hud) hud.style.display = 'none';
+  if (roomStatusText) roomStatusText.textContent = 'Match complete. Return to the homepage to start again.';
+  if (gameInfoText) gameInfoText.textContent = 'Not connected';
+  if (playerInfoText) playerInfoText.textContent = '';
+}
+
 function drawCanvasScoreboard() {
   ctx.save();
   const padding = 10;
@@ -399,6 +431,10 @@ function drawScene() {
     if (!roundOver) {
       scores[team] = (scores[team] || 0) + 1;
       roundOver = true;
+      if (scores[team] >= SCORE_LIMIT) {
+        goHome();
+        return;
+      }
     }
     if (restartTimer > 0) {
       statusText.innerHTML += ` Restarting in ${Math.ceil(restartTimer)}...`;
