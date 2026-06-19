@@ -21,14 +21,32 @@ let localPlayerId = 'p1';
 let reconnectAttempts = 0;
 let reconnectTimeout = null;
 let lastConnectAttempt = 0;
+let roomCodeInfoText;
+let keepaliveInterval = null;
+let roomJoined = false;
+let lastRoomAction = null;
 const maxReconnectDelay = 10; // seconds
 const minReconnectDelay = 1000; // milliseconds
-const DEFAULT_WS_HOST = 'localhost:8000';
+const KEEPALIVE_INTERVAL = 20000; // milliseconds
+const DEFAULT_PUB_WS_HOST = 'localhost:8000';
+const DEFAULT_DEV_WS_PORT = '7999';
 const SCORE_LIMIT = 5;
 const pendingSocketMessages = [];
 
 function setCustomWebSocketHost(host) {
   customWebSocketHost = host ? host.trim() : null;
+}
+
+function getDefaultWebSocketHost() {
+  const pageUrl = new URL(window.location.href);
+  const host = pageUrl.hostname;
+  const port = pageUrl.port;
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+
+  if (isLocalHost) {
+    return `localhost:${DEFAULT_DEV_WS_PORT}`;
+  }
+  return DEFAULT_PUB_WS_HOST;
 }
 
 function getWebSocketHost() {
@@ -40,7 +58,7 @@ function getWebSocketHost() {
   if (queryHost) {
     return queryHost;
   }
-  return DEFAULT_WS_HOST;
+  return getDefaultWebSocketHost();
 }
 
 function getWebSocketProtocol(host) {
@@ -52,6 +70,22 @@ function getWebSocketProtocol(host) {
     return 'wss';
   }
   return 'ws';
+}
+
+function startKeepalive() {
+  stopKeepalive();
+  keepaliveInterval = setInterval(() => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'ping' }));
+    }
+  }, KEEPALIVE_INTERVAL);
+}
+
+function stopKeepalive() {
+  if (keepaliveInterval) {
+    clearInterval(keepaliveInterval);
+    keepaliveInterval = null;
+  }
 }
 
 const weapons = {
@@ -280,6 +314,8 @@ function goHome() {
   isHost = false;
   localPlayerId = 'p1';
   reconnectAttempts = 0;
+  roomJoined = false;
+  lastRoomAction = null;
   roundOver = false;
   restartTimer = 0;
   scores.Blue = 0;
@@ -548,9 +584,18 @@ function connectSocket() {
       reconnectTimeout = null;
     }
     roomStatusText.textContent = 'Connected to server.';
-    if (pendingSocketMessages.length > 0) {
+    startKeepalive();
+
+    const hadQueuedMessage = pendingSocketMessages.length > 0;
+    if (hadQueuedMessage) {
       pendingSocketMessages.forEach((pending) => socket.send(JSON.stringify(pending)));
       pendingSocketMessages.length = 0;
+    }
+
+    if (!roomJoined && roomCode && localPlayerId && !hadQueuedMessage) {
+      socket.send(JSON.stringify({ type: 'resume', code: roomCode, playerId: localPlayerId }));
+    } else if (!roomJoined && lastRoomAction && !hadQueuedMessage) {
+      socket.send(JSON.stringify(lastRoomAction));
     }
   });
 
@@ -563,18 +608,37 @@ function connectSocket() {
     const data = JSON.parse(event.data);
     if (data.type === 'created') {
       roomCode = data.code;
+      roomJoined = true;
       isHost = true;
       roomStatusText.textContent = `Room created: ${roomCode}`;
+      if (roomCodeInfoText) {
+        roomCodeInfoText.textContent = `Share this code with the other player: ${roomCode}`;
+      }
       localPlayerId = data.playerId || 'p1';
+      lastRoomAction = { type: 'create' };
     }
-    if (data.type === 'joined') {
+    if (data.type === 'joined' || data.type === 'rejoined') {
       roomCode = data.code;
-      isHost = false;
+      roomJoined = true;
+      isHost = data.playerId === 'p1';
       roomStatusText.textContent = `Joined room: ${roomCode}`;
+      if (roomCodeInfoText) {
+        roomCodeInfoText.textContent = `Connected to room ${roomCode}`;
+      }
       localPlayerId = data.playerId || 'p2';
+      if (!lastRoomAction) {
+        lastRoomAction = { type: 'join', code: data.code };
+      }
     }
     if (data.type === 'roomReady') {
       roomStatusText.textContent = `Room ready: ${data.code}`;
+      if (roomCodeInfoText) {
+        roomCodeInfoText.textContent = `Game ready! Room code: ${data.code}`;
+      }
+    }
+    if (data.type === 'pong') {
+      // Application-level heartbeat response.
+      return;
     }
     if (data.type === 'state') {
       const remote = players.find((p) => p.id === data.from);
@@ -601,8 +665,10 @@ function connectSocket() {
 
   socket.addEventListener('close', () => {
     isConnected = false;
+    roomJoined = false;
     roomStatusText.textContent = 'Disconnected from server.';
     socket = null;
+    stopKeepalive();
     // attempt reconnect with backoff
     reconnectAttempts = Math.min(reconnectAttempts + 1, 10);
     const delay = Math.min(maxReconnectDelay, Math.pow(2, reconnectAttempts)) * 1000;
@@ -619,6 +685,7 @@ function connectSocket() {
 function initUI() {
   statusText = document.getElementById('status');
   roomStatusText = document.getElementById('roomStatus');
+  roomCodeInfoText = document.getElementById('roomCodeInfo');
   hud = document.getElementById('hud');
   gameInfoText = document.getElementById('gameInfo');
   playerInfoText = document.getElementById('playerInfo');
@@ -635,6 +702,10 @@ function initUI() {
   hud.style.display = 'none';
 
   function sendSocketMessage(message) {
+    if (message.type === 'create' || message.type === 'join') {
+      lastRoomAction = message;
+    }
+
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       pendingSocketMessages.push(message);
       connectSocket();
@@ -644,7 +715,8 @@ function initUI() {
   }
 
   createRoomBtn.addEventListener('click', () => {
-    sendSocketMessage({ type: 'create' });
+    lastRoomAction = { type: 'create' };
+    sendSocketMessage(lastRoomAction);
     menu.style.display = 'none';
     hud.style.display = 'block';
   });
@@ -661,7 +733,8 @@ function initUI() {
       roomStatusText.textContent = 'Enter a join code.';
       return;
     }
-    sendSocketMessage({ type: 'join', code });
+    lastRoomAction = { type: 'join', code };
+    sendSocketMessage(lastRoomAction);
     menu.style.display = 'none';
     hud.style.display = 'block';
   });
@@ -751,7 +824,14 @@ function initGame() {
   });
 
   requestAnimationFrame(loop);
-  connectSocket();
+  // Auto-connect only on localhost (dev). Public pages should not auto-connect
+  // to a private dev port — users must enter a server host first.
+  const pageUrl = new URL(window.location.href);
+  const pageHost = pageUrl.hostname;
+  const isLocalHost = pageHost === 'localhost' || pageHost === '127.0.0.1' || pageHost === '[::1]';
+  if (isLocalHost) {
+    connectSocket();
+  }
 }
 
 window.addEventListener('load', () => {
