@@ -15,11 +15,17 @@
         <button id="showJoin">Join room</button>
       </div>
       <div class="room-controls" id="joinControls">
-        <input id="serverHost" placeholder="Server host (default shared dev server)" />
+        <input id="serverHost" placeholder="Server host (default: 7999 local dev, 8000 pub)" />
         <input id="roomCode" placeholder="Enter join code" maxlength="4" />
         <button id="joinRoom">Join</button>
       </div>
+      <div class="room-controls" id="firebaseControls">
+        <textarea id="firebaseConfig" placeholder='Paste Firebase config JSON here' rows="3"></textarea>
+        <button id="useFirebase">Use Firebase Realtime DB</button>
+        <div class="status" id="firebaseStatus"></div>
+      </div>
       <div class="status" id="roomStatus"></div>
+      <div class="status" id="roomCodeInfo"></div>
       <div class="help">
         <p>Blue/Red player controls: WASD + mouse + click + E</p>
         <p>Red is the joined player and uses the same controls as Blue.</p>
@@ -40,6 +46,8 @@
       <div class="status" id="status"></div>
     </div>
   </div>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
   <script src="game.js"></script>
 </body>
 </html>

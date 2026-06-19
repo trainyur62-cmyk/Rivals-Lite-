@@ -25,6 +25,10 @@ let roomCodeInfoText;
 let keepaliveInterval = null;
 let roomJoined = false;
 let lastRoomAction = null;
+let useFirebase = false;
+let firebaseApp = null;
+let firebaseDb = null;
+let firebaseListeners = [];
 const maxReconnectDelay = 10; // seconds
 const minReconnectDelay = 1000; // milliseconds
 const KEEPALIVE_INTERVAL = 20000; // milliseconds
@@ -331,6 +335,10 @@ function goHome() {
   if (roomStatusText) roomStatusText.textContent = 'Match complete. Return to the homepage to start again.';
   if (gameInfoText) gameInfoText.textContent = 'Not connected';
   if (playerInfoText) playerInfoText.textContent = '';
+  // cleanup firebase listeners/presence if used
+  if (useFirebase) {
+    firebaseCleanup();
+  }
 }
 
 function drawCanvasScoreboard() {
@@ -510,8 +518,141 @@ function drawCodeOverlay(code) {
   ctx.restore();
 }
 
+/* Firebase RTDB support */
+function initFirebaseFromObject(config) {
+  try {
+    if (!firebaseApp) {
+      firebaseApp = firebase.initializeApp(config);
+      firebaseDb = firebase.database();
+    }
+    return true;
+  } catch (e) {
+    console.error('Firebase init error', e);
+    return false;
+  }
+}
+
+function firebaseCreateRoom() {
+  // generate 4-char hex code
+  const code = Math.random().toString(16).slice(2, 6);
+  const roomRef = firebaseDb.ref(`rooms/${code}`);
+  const metaRef = roomRef.child('meta');
+  metaRef.set({ created: Date.now(), backend: 'firebase' });
+  const playersRef = roomRef.child('players');
+  const myRef = playersRef.child('p1');
+  myRef.set({ connected: true, ts: Date.now() });
+  myRef.onDisconnect().remove();
+  roomCode = code;
+  roomJoined = true;
+  isHost = true;
+  localPlayerId = 'p1';
+  roomStatusText.textContent = `Room created: ${roomCode}`;
+  if (roomCodeInfoText) roomCodeInfoText.textContent = `Share this code with the other player: ${roomCode}`;
+  setupFirebaseStateListeners(code);
+}
+
+function firebaseJoinRoom(code) {
+  const roomRef = firebaseDb.ref(`rooms/${code}`);
+  roomRef.child('meta').once('value').then((snap) => {
+    if (!snap.exists()) {
+      roomStatusText.textContent = 'Room not found';
+      return;
+    }
+    const playersRef = roomRef.child('players');
+    playersRef.once('value').then((ps) => {
+      const count = ps.numChildren();
+      if (count >= 2) {
+        roomStatusText.textContent = 'Room full';
+        return;
+      }
+      const myId = count === 0 ? 'p1' : 'p2';
+      const myRef = playersRef.child(myId);
+      myRef.set({ connected: true, ts: Date.now() });
+      myRef.onDisconnect().remove();
+      roomCode = code;
+      roomJoined = true;
+      isHost = myId === 'p1';
+      localPlayerId = myId;
+      roomStatusText.textContent = `Joined room: ${roomCode}`;
+      if (roomCodeInfoText) roomCodeInfoText.textContent = `Connected to room ${roomCode}`;
+      setupFirebaseStateListeners(code);
+    });
+  }).catch((err) => { roomStatusText.textContent = 'Error joining room'; console.error(err); });
+}
+
+function setupFirebaseStateListeners(code) {
+  // listen for other player's state changes
+  const stateRef = firebaseDb.ref(`rooms/${code}/state`);
+  const childAdded = stateRef.on('child_added', (snap) => {
+    const id = snap.key;
+    if (id === localPlayerId) return;
+    const payload = snap.val();
+    applyRemoteState(id, payload);
+  });
+  const childChanged = stateRef.on('child_changed', (snap) => {
+    const id = snap.key;
+    if (id === localPlayerId) return;
+    const payload = snap.val();
+    applyRemoteState(id, payload);
+  });
+  firebaseListeners.push({ ref: stateRef, events: ['child_added', 'child_changed'] });
+}
+
+function firebaseSendState(payload) {
+  if (!useFirebase || !roomJoined || !roomCode) return;
+  try {
+    const ref = firebaseDb.ref(`rooms/${roomCode}/state/${localPlayerId}`);
+    ref.set(payload);
+    ref.onDisconnect().remove();
+  } catch (e) {
+    console.warn('firebaseSendState err', e);
+  }
+}
+
+function firebaseCleanup() {
+  try {
+    for (const l of firebaseListeners) {
+      l.ref.off();
+    }
+    firebaseListeners.length = 0;
+    if (roomCode && localPlayerId) {
+      firebaseDb.ref(`rooms/${roomCode}/players/${localPlayerId}`).remove();
+      firebaseDb.ref(`rooms/${roomCode}/state/${localPlayerId}`).remove();
+    }
+  } catch (e) {
+    console.warn('firebase cleanup', e);
+  }
+  roomJoined = false;
+  roomCode = null;
+  useFirebase = false;
+}
+
+function applyRemoteState(id, payload) {
+  // payload.players and payload.bullets expected
+  if (!payload) return;
+  const remote = players.find((p) => p.id === id);
+  if (remote && payload.players && payload.players.length > 0) {
+    const inc = payload.players[0];
+    remote.x = inc.x;
+    remote.y = inc.y;
+    remote.aimX = inc.aimX;
+    remote.aimY = inc.aimY;
+    remote.weapon = inc.weapon;
+    remote.health = inc.health;
+  }
+  if (payload.bullets) {
+    bullets = bullets.filter((bullet) => bullet.owner !== id);
+    bullets.push(...payload.bullets.map((b) => ({ ...b, owner: id })));
+  }
+}
+
 function sendState() {
-  if (!socket || socket.readyState !== WebSocket.OPEN || !roomCode) return;
+  // If using Firebase, push state there. Otherwise use WebSocket.
+  if (useFirebase) {
+    if (!firebaseDb || !roomJoined || !roomCode) return;
+  } else {
+    if (!socket || socket.readyState !== WebSocket.OPEN || !roomCode) return;
+  }
   // send only local player's state and bullets owned by local player
   const local = players.find((p) => p.id === localPlayerId);
   if (!local) return;
@@ -519,7 +660,11 @@ function sendState() {
     players: [{ id: local.id, x: local.x, y: local.y, aimX: local.aimX, aimY: local.aimY, weapon: local.weapon, health: local.health }],
     bullets: bullets.filter((b) => b.owner === local.id),
   };
-  socket.send(JSON.stringify({ type: 'state', payload }));
+  if (useFirebase) {
+    firebaseSendState(payload);
+  } else {
+    socket.send(JSON.stringify({ type: 'state', payload }));
+  }
 }
 
 function loop(timestamp) {
@@ -529,9 +674,8 @@ function loop(timestamp) {
   regenerateHealth(dt);
   drawScene();
 
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    sendState();
-  }
+  // send state via the active transport (WebSocket or Firebase)
+  sendState();
 
   // Handle automatic restart after win
   const alive2 = players.filter((p) => p.health > 0);
@@ -697,6 +841,9 @@ function initUI() {
   const roomCodeInput = document.getElementById('roomCode');
   const serverHostInput = document.getElementById('serverHost');
   const joinRoomBtn = document.getElementById('joinRoom');
+  const firebaseConfigInput = document.getElementById('firebaseConfig');
+  const useFirebaseBtn = document.getElementById('useFirebase');
+  const firebaseStatus = document.getElementById('firebaseStatus');
 
   joinControls.style.display = 'none';
   hud.style.display = 'none';
@@ -715,6 +862,12 @@ function initUI() {
   }
 
   createRoomBtn.addEventListener('click', () => {
+    if (useFirebase) {
+      firebaseCreateRoom();
+      menu.style.display = 'none';
+      hud.style.display = 'block';
+      return;
+    }
     lastRoomAction = { type: 'create' };
     sendSocketMessage(lastRoomAction);
     menu.style.display = 'none';
@@ -733,11 +886,39 @@ function initUI() {
       roomStatusText.textContent = 'Enter a join code.';
       return;
     }
+    if (useFirebase) {
+      firebaseJoinRoom(code);
+      menu.style.display = 'none';
+      hud.style.display = 'block';
+      return;
+    }
     lastRoomAction = { type: 'join', code };
     sendSocketMessage(lastRoomAction);
     menu.style.display = 'none';
     hud.style.display = 'block';
   });
+
+  if (useFirebaseBtn) {
+    useFirebaseBtn.addEventListener('click', () => {
+      const raw = firebaseConfigInput.value.trim();
+      if (!raw) {
+        if (firebaseStatus) firebaseStatus.textContent = 'Paste Firebase config JSON first.';
+        return;
+      }
+      try {
+        const cfg = JSON.parse(raw);
+        const ok = initFirebaseFromObject(cfg);
+        if (ok) {
+          useFirebase = true;
+          if (firebaseStatus) firebaseStatus.textContent = 'Firebase ready';
+        } else {
+          if (firebaseStatus) firebaseStatus.textContent = 'Firebase init failed';
+        }
+      } catch (e) {
+        if (firebaseStatus) firebaseStatus.textContent = 'Invalid JSON';
+      }
+    });
+  }
 }
 
 function initGame() {
