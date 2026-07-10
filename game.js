@@ -177,6 +177,15 @@ function clamp(v, min, max) {
   return Math.min(Math.max(v, min), max);
 }
 
+function normalizeMovementKey(input) {
+  const key = (input || '').toLowerCase();
+  if (['w', 'keyw', 'arrowup', 'up'].includes(key)) return 'w';
+  if (['s', 'keys', 'arrowdown', 'down'].includes(key)) return 's';
+  if (['a', 'keya', 'arrowleft', 'left'].includes(key)) return 'a';
+  if (['d', 'keyd', 'arrowright', 'right'].includes(key)) return 'd';
+  return null;
+}
+
 function getDeltaTime(timestamp) {
   if (!getDeltaTime.last) {
     getDeltaTime.last = timestamp;
@@ -1163,14 +1172,9 @@ function initGame() {
   players[1].aimY = players[1].y;
 
   const setMovementKey = (key, value) => {
-    const normalizedKey = key.toLowerCase();
-    if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(normalizedKey)) {
-      keys[normalizedKey] = value;
-      if (normalizedKey === 'arrowleft') keys.a = value;
-      if (normalizedKey === 'arrowright') keys.d = value;
-      if (normalizedKey === 'arrowup') keys.w = value;
-      if (normalizedKey === 'arrowdown') keys.s = value;
-    }
+    const normalizedKey = normalizeMovementKey(key);
+    if (!normalizedKey) return;
+    keys[normalizedKey] = value;
   };
 
   window.addEventListener('keydown', (event) => {
@@ -1179,7 +1183,8 @@ function initGame() {
     const isInputFocused = activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA';
 
     // Only prevent default and handle game input if not typing in an input field
-    if (!isInputFocused && ['w', 'a', 's', 'd', ' ', 'e', 'p', 'o', 'q', 'r', 'f'].includes(key)) {
+    const normalizedMovementKey = normalizeMovementKey(key);
+    if (!isInputFocused && ['w', 'a', 's', 'd', ' ', 'e', 'p', 'o', 'q', 'r', 'f', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key) || normalizedMovementKey) {
       event.preventDefault();
     }
 
