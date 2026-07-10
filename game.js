@@ -5,6 +5,7 @@ let roomStatusText;
 let hud;
 let gameInfoText;
 let playerInfoText;
+let roomMode = 'local';
 
 let WIDTH;
 let HEIGHT;
@@ -94,20 +95,30 @@ function stopKeepalive() {
 
 const weapons = {
   primary: {
-    name: 'Rapid Pulse',
+    name: 'Cannon',
     fireRate: 0.08,
-    bulletSpeed: 1000,
-    bulletSize: 4,
-    damage: 5,
+    bulletSpeed: 500,
+    bulletSize: 6,
+    damage: 20,
     color: '#64d9ff',
+    reloadTime: 1.5,
   },
   secondary: {
-    name: 'Impact Rocket',
-    fireRate: 0.5,
+    name: 'Rapid Pulse',
+    fireRate: 0.25,
     bulletSpeed: 500,
-    bulletSize: 12,
-    damage: 20,
+    bulletSize: 8,
+    damage: 7,
     color: '#ffb86c',
+    reloadTime: 1.5,
+  },
+  knife: {
+    name: 'Knife',
+    fireRate: 3,
+    damage: 35,
+    backstabDamage: 50,
+    color: '#d9b38c',
+    range: 50,
   },
 };
 
@@ -124,6 +135,8 @@ const players = [
     aimY: 0,
     health: 150,
     lastDamageTime: 0,
+    utility: 'grenade',
+    utilityState: { cooldown: 0, charging: false, chargeStartedAt: 0, chargeDuration: 5 },
   },
   {
     id: 'p2',
@@ -137,6 +150,8 @@ const players = [
     aimY: 0,
     health: 150,
     lastDamageTime: 0,
+    utility: 'grenade',
+    utilityState: { cooldown: 0, charging: false, chargeStartedAt: 0, chargeDuration: 5 },
   },
 ];
 
@@ -176,7 +191,6 @@ function updatePlayer(player, dt) {
   let dx = 0;
   let dy = 0;
 
-  // Only apply input to the local player
   const applyInput = player.id === localPlayerId;
   if (!applyInput) return;
 
@@ -193,17 +207,57 @@ function updatePlayer(player, dt) {
     dy /= mag;
   }
 
-  player.x += dx * player.speed * dt;
-  player.y += dy * player.speed * dt;
+  const nextX = player.x + dx * player.speed * dt;
+  const nextY = player.y + dy * player.speed * dt;
+  const previousX = player.x;
+  const previousY = player.y;
+
+  if (pathIntersectsAnyWall(player.x, player.y, nextX, nextY, player.radius, walls)) {
+    player.x = previousX;
+    player.y = previousY;
+  } else {
+    player.x = nextX;
+    player.y = nextY;
+  }
 
   player.x = clamp(player.x, player.radius, WIDTH - player.radius);
   player.y = clamp(player.y, player.radius, HEIGHT - player.radius);
+}
+
+function pathIntersectsAnyWall(startX, startY, endX, endY, radius, wallList) {
+  return wallList.some((wall) => pathIntersectsWall(startX, startY, endX, endY, radius, wall));
+}
+
+function pathIntersectsWall(startX, startY, endX, endY, radius, rect) {
+  const expanded = {
+    x: rect.x - radius,
+    y: rect.y - radius,
+    w: rect.w + radius * 2,
+    h: rect.h + radius * 2,
+  };
+  return lineIntersectsRect(startX, startY, endX, endY, expanded);
+}
+
+function circleRectCollision(cx, cy, radius, rect) {
+  const closestX = Math.max(rect.x, Math.min(cx, rect.x + rect.w));
+  const closestY = Math.max(rect.y, Math.min(cy, rect.y + rect.h));
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  return dx * dx + dy * dy < radius * radius;
 }
 
 function shootWeapon(player) {
   const now = performance.now() / 1000;
   const shotKey = player.id;
   const config = weapons[player.weapon];
+
+  if (!config) return;
+  if (player.weapon === 'knife') {
+    if (now - lastShot[shotKey] < config.fireRate) return;
+    performKnifeAttack(player);
+    lastShot[shotKey] = now;
+    return;
+  }
 
   if (now - lastShot[shotKey] < config.fireRate) return;
 
@@ -223,6 +277,106 @@ function shootWeapon(player) {
   lastShot[shotKey] = now;
 }
 
+function performKnifeAttack(player) {
+  const angle = Math.atan2(player.aimY - player.y, player.aimX - player.x);
+  const attackRange = weapons.knife.range;
+  const attackX = player.x + Math.cos(angle) * attackRange;
+  const attackY = player.y + Math.sin(angle) * attackRange;
+
+  for (const target of players) {
+    if (target.id === player.id || target.health <= 0) continue;
+    const dx = attackX - target.x;
+    const dy = attackY - target.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= target.radius + 8) {
+      const isBackstab = isBehindTarget(player, target);
+      const damage = isBackstab ? weapons.knife.backstabDamage : weapons.knife.damage;
+      target.health = Math.max(0, target.health - damage);
+      target.lastDamageTime = performance.now() / 1000;
+      break;
+    }
+  }
+}
+
+function isBehindTarget(attacker, target) {
+  const attackAngle = Math.atan2(attacker.aimY - attacker.y, attacker.aimX - attacker.x);
+  const targetAngle = Math.atan2(target.y - attacker.y, target.x - attacker.x);
+  const delta = ((targetAngle - attackAngle + Math.PI) % (Math.PI * 2)) - Math.PI;
+  return Math.abs(delta) < Math.PI / 4;
+}
+
+function cycleUtility(player) {
+  if (!player) return;
+  player.utility = player.utility === 'grenade' ? 'medkit' : 'grenade';
+}
+
+function useUtility(player) {
+  if (!player) return;
+  const state = player.utilityState || { cooldown: 0, charging: false, chargeStartedAt: 0, chargeDuration: 5 };
+  player.utilityState = state;
+  if (state.cooldown > 0 || state.charging) return;
+
+  if (player.utility === 'medkit') {
+    state.charging = true;
+    state.chargeStartedAt = performance.now() / 1000;
+    state.chargeDuration = 5;
+    return;
+  }
+
+  if (player.utility === 'grenade') {
+    throwGrenade(player);
+    state.cooldown = 25;
+  }
+}
+
+function throwGrenade(player) {
+  const angle = Math.atan2(player.aimY - player.y, player.aimX - player.x);
+  bullets.push({
+    owner: player.id,
+    type: 'grenade',
+    x: player.x + Math.cos(angle) * player.radius,
+    y: player.y + Math.sin(angle) * player.radius,
+    vx: Math.cos(angle) * 260,
+    vy: Math.sin(angle) * 260,
+    lifetime: 1.2,
+    size: 8,
+    color: '#ff5a5a',
+    damage: 50,
+    radius: 90,
+    previewX: player.x + Math.cos(angle) * 280,
+    previewY: player.y + Math.sin(angle) * 280,
+  });
+}
+
+function explodeGrenade(grenade) {
+  for (const player of players) {
+    if (player.id === grenade.owner || player.health <= 0) continue;
+    const dx = grenade.x - player.x;
+    const dy = grenade.y - player.y;
+    if (Math.hypot(dx, dy) <= grenade.radius + player.radius) {
+      player.health = Math.max(0, player.health - grenade.damage);
+      player.lastDamageTime = performance.now() / 1000;
+    }
+  }
+}
+
+function updateUtilityStates(dt) {
+  const now = performance.now() / 1000;
+  for (const player of players) {
+    const state = player.utilityState || { cooldown: 0, charging: false, chargeStartedAt: 0, chargeDuration: 5 };
+    player.utilityState = state;
+    if (state.cooldown > 0) {
+      state.cooldown = Math.max(0, state.cooldown - dt);
+    }
+    if (state.charging && now - state.chargeStartedAt >= state.chargeDuration) {
+      player.health = Math.min(150, player.health + 70);
+      player.lastDamageTime = now;
+      state.charging = false;
+      state.cooldown = 30;
+    }
+  }
+}
+
 function updateBullets(dt) {
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
@@ -232,13 +386,21 @@ function updateBullets(dt) {
 
     const offscreen = b.x < -50 || b.x > WIDTH + 50 || b.y < -50 || b.y > HEIGHT + 50;
     if (offscreen || b.lifetime <= 0) {
+      if (b.type === 'grenade') {
+        explodeGrenade(b);
+      }
       bullets.splice(i, 1);
       continue;
     }
 
     let removed = false;
     for (const wall of walls) {
-      if (b.x > wall.x && b.x < wall.x + wall.w && b.y > wall.y && b.y < wall.y + wall.h) {
+      const prevX = b.x - b.vx * dt;
+      const prevY = b.y - b.vy * dt;
+      if (lineIntersectsRect(prevX, prevY, b.x, b.y, wall)) {
+        if (b.type === 'grenade') {
+          explodeGrenade(b);
+        }
         bullets.splice(i, 1);
         removed = true;
         break;
@@ -428,6 +590,14 @@ function drawBullets() {
     ctx.beginPath();
     ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
     ctx.fill();
+
+    if (b.type === 'grenade') {
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      ctx.lineWidth = 2;
+      ctx.arc(b.previewX, b.previewY, 24, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 }
 
@@ -443,6 +613,36 @@ function drawReticle() {
   ctx.moveTo(mouse.x, mouse.y - 16);
   ctx.lineTo(mouse.x, mouse.y + 16);
   ctx.stroke();
+}
+
+function lineIntersectsRect(ax, ay, bx, by, rect) {
+  const left = rect.x;
+  const right = rect.x + rect.w;
+  const top = rect.y;
+  const bottom = rect.y + rect.h;
+
+  const intersects = (x1, y1, x2, y2, x3, y3, x4, y4) => {
+    const s1x = x2 - x1;
+    const s1y = y2 - y1;
+    const s2x = x4 - x3;
+    const s2y = y4 - y3;
+    const s = ((x3 - x1) * s1y - (y3 - y1) * s1x) / (-s2x * s1y + s1x * s2y);
+    const t = ((x3 - x1) * s1y - (y3 - y1) * s1x) / (-s2x * s1y + s1x * s2y);
+    return s >= 0 && s <= 1 && t >= 0 && t <= 1;
+  };
+
+  return (
+    intersects(ax, ay, bx, by, left, top, right, top) ||
+    intersects(ax, ay, bx, by, right, top, right, bottom) ||
+    intersects(ax, ay, bx, by, right, bottom, left, bottom) ||
+    intersects(ax, ay, bx, by, left, bottom, left, top) ||
+    pointInRect(ax, ay, rect) ||
+    pointInRect(bx, by, rect)
+  );
+}
+
+function pointInRect(x, y, rect) {
+  return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
 }
 
 function drawScene() {
@@ -464,7 +664,9 @@ function drawScene() {
 
   const playerTexts = players.map((player) => {
     const hp = Math.ceil(player.health);
-    return `${getTeamName(player)}: ${hp}/150 | ${weapons[player.weapon].name}`;
+    const weaponName = weapons[player.weapon]?.name || player.weapon;
+    const utilityName = player.utility === 'grenade' ? 'Grenade' : 'Medkit';
+    return `${getTeamName(player)}: ${hp}/150 | ${weaponName} | ${utilityName}`;
   }).join(' / ');
 
   const alive = players.filter((player) => player.health > 0);
@@ -639,6 +841,8 @@ function applyRemoteState(id, payload) {
     remote.aimY = inc.aimY;
     remote.weapon = inc.weapon;
     remote.health = inc.health;
+    remote.utility = inc.utility || remote.utility;
+    remote.utilityState = inc.utilityState || remote.utilityState;
   }
   if (payload.bullets) {
     bullets = bullets.filter((bullet) => bullet.owner !== id);
@@ -657,7 +861,7 @@ function sendState() {
   const local = players.find((p) => p.id === localPlayerId);
   if (!local) return;
   const payload = {
-    players: [{ id: local.id, x: local.x, y: local.y, aimX: local.aimX, aimY: local.aimY, weapon: local.weapon, health: local.health }],
+    players: [{ id: local.id, x: local.x, y: local.y, aimX: local.aimX, aimY: local.aimY, weapon: local.weapon, health: local.health, utility: local.utility, utilityState: local.utilityState }],
     bullets: bullets.filter((b) => b.owner === local.id),
   };
   if (useFirebase) {
@@ -672,6 +876,7 @@ function loop(timestamp) {
   players.forEach((player) => updatePlayer(player, dt));
   updateBullets(dt);
   regenerateHealth(dt);
+  updateUtilityStates(dt);
   drawScene();
 
   // send state via the active transport (WebSocket or Firebase)
@@ -826,6 +1031,14 @@ function connectSocket() {
   });
 }
 
+function setRoomMode(mode) {
+  roomMode = mode;
+  const roomControls = document.getElementById('roomControls');
+  if (roomControls) {
+    roomControls.textContent = mode === 'firebase' ? 'Firebase room mode' : 'Online room mode';
+  }
+}
+
 function initUI() {
   statusText = document.getElementById('status');
   roomStatusText = document.getElementById('roomStatus');
@@ -844,6 +1057,7 @@ function initUI() {
   const firebaseConfigInput = document.getElementById('firebaseConfig');
   const useFirebaseBtn = document.getElementById('useFirebase');
   const firebaseStatus = document.getElementById('firebaseStatus');
+  const roomControls = document.getElementById('roomControls');
 
   joinControls.style.display = 'none';
   hud.style.display = 'none';
@@ -863,11 +1077,13 @@ function initUI() {
 
   createRoomBtn.addEventListener('click', () => {
     if (useFirebase) {
+      setRoomMode('firebase');
       firebaseCreateRoom();
       menu.style.display = 'none';
       hud.style.display = 'block';
       return;
     }
+    setRoomMode('online');
     lastRoomAction = { type: 'create' };
     sendSocketMessage(lastRoomAction);
     menu.style.display = 'none';
@@ -887,11 +1103,13 @@ function initUI() {
       return;
     }
     if (useFirebase) {
+      setRoomMode('firebase');
       firebaseJoinRoom(code);
       menu.style.display = 'none';
       hud.style.display = 'block';
       return;
     }
+    setRoomMode('online');
     lastRoomAction = { type: 'join', code };
     sendSocketMessage(lastRoomAction);
     menu.style.display = 'none';
@@ -910,6 +1128,7 @@ function initUI() {
         const ok = initFirebaseFromObject(cfg);
         if (ok) {
           useFirebase = true;
+          setRoomMode('firebase');
           if (firebaseStatus) firebaseStatus.textContent = 'Firebase ready';
         } else {
           if (firebaseStatus) firebaseStatus.textContent = 'Firebase init failed';
@@ -955,7 +1174,7 @@ function initGame() {
     const isInputFocused = activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA';
 
     // Only prevent default and handle game input if not typing in an input field
-    if (!isInputFocused && ['w', 'a', 's', 'd', ' ', 'e', 'p', 'o'].includes(key)) {
+    if (!isInputFocused && ['w', 'a', 's', 'd', ' ', 'e', 'p', 'o', 'q', 'r', 'f'].includes(key)) {
       event.preventDefault();
     }
 
@@ -963,7 +1182,13 @@ function initGame() {
       setMovementKey(key, true);
       const local = players.find((p) => p.id === localPlayerId) || players[0];
       if (key === 'e' || key === 'p') {
-        local.weapon = local.weapon === 'primary' ? 'secondary' : 'primary';
+        local.weapon = local.weapon === 'primary' ? 'secondary' : local.weapon === 'secondary' ? 'knife' : 'primary';
+      }
+      if (key === 'q' || key === 'r') {
+        cycleUtility(local);
+      }
+      if (key === 'f') {
+        useUtility(local);
       }
       if (key === 'o' || key === ' ') {
         shootWeapon(local);
@@ -993,6 +1218,10 @@ function initGame() {
       shootWeapon(local);
     }
   });
+
+  if (roomControls) {
+    roomControls.textContent = 'Local play';
+  }
 
   canvas.addEventListener('contextmenu', (event) => {
     event.preventDefault();

@@ -59,8 +59,51 @@ wss.on('connection', (ws) => {
         ws.playerId = 'p2';
         ws.send(JSON.stringify({ type: 'joined', code: data.code, playerId: 'p2' }));
         room.players.forEach((player) => {
-          player.send(JSON.stringify({ type: 'roomReady', code: data.code }));
+          if (player !== ws) {
+            player.send(JSON.stringify({ type: 'roomReady', code: data.code }));
+          }
         });
+      }
+      if (data.type === 'resume') {
+        const room = rooms.get(data.code);
+        if (!room) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Room not found or expired' }));
+          return;
+        }
+        if (!['p1', 'p2'].includes(data.playerId)) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid player id' }));
+          return;
+        }
+        const existingIndex = room.players.findIndex((player) => player.playerId === data.playerId);
+        if (existingIndex !== -1) {
+          room.players[existingIndex] = ws;
+          ws.roomCode = data.code;
+          ws.playerId = data.playerId;
+          ws.send(JSON.stringify({ type: 'rejoined', code: data.code, playerId: data.playerId }));
+          room.players.forEach((player) => {
+            if (player !== ws) {
+              player.send(JSON.stringify({ type: 'roomReady', code: data.code }));
+            }
+          });
+          return;
+        }
+        if (room.players.length < 2) {
+          room.players.push(ws);
+          ws.roomCode = data.code;
+          ws.playerId = data.playerId;
+          ws.send(JSON.stringify({ type: 'rejoined', code: data.code, playerId: data.playerId }));
+          room.players.forEach((player) => {
+            if (player !== ws) {
+              player.send(JSON.stringify({ type: 'roomReady', code: data.code }));
+            }
+          });
+          return;
+        }
+        ws.send(JSON.stringify({ type: 'error', message: 'Room full' }));
+      }
+      if (data.type === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong' }));
+        return;
       }
       if (data.type === 'state' && ws.roomCode) {
         const room = rooms.get(ws.roomCode);
@@ -89,7 +132,7 @@ wss.on('connection', (ws) => {
   });
 });
 
-const PORT = process.env.PORT || 8000;
+const PORT = process.env.PORT || 7999;
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
