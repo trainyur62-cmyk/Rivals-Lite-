@@ -194,10 +194,10 @@ function updatePlayer(player, dt) {
   const applyInput = player.id === localPlayerId;
   if (!applyInput) return;
 
-  if (keys.w) dy -= 1;
-  if (keys.s) dy += 1;
-  if (keys.a) dx -= 1;
-  if (keys.d) dx += 1;
+  if (keys.w || keys.arrowup) dy -= 1;
+  if (keys.s || keys.arrowdown) dy += 1;
+  if (keys.a || keys.arrowleft) dx -= 1;
+  if (keys.d || keys.arrowright) dx += 1;
   player.aimX = mouse.x;
   player.aimY = mouse.y;
 
@@ -1163,8 +1163,13 @@ function initGame() {
   players[1].aimY = players[1].y;
 
   const setMovementKey = (key, value) => {
-    if (['w', 'a', 's', 'd'].includes(key)) {
-      keys[key] = value;
+    const normalizedKey = key.toLowerCase();
+    if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(normalizedKey)) {
+      keys[normalizedKey] = value;
+      if (normalizedKey === 'arrowleft') keys.a = value;
+      if (normalizedKey === 'arrowright') keys.d = value;
+      if (normalizedKey === 'arrowup') keys.w = value;
+      if (normalizedKey === 'arrowdown') keys.s = value;
     }
   };
 
